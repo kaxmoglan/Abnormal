@@ -1,75 +1,85 @@
 const fs = require('fs');
 const path = require('path');
 
-const MISFITS_KEY = 'HASH_CLASHES';
-
 function detectDuplicates() {
 	const duplicationMap = new Map();
+	const MISFITS_KEY = 'MISFITS';
 	const result = [];
 
-	enumerateFileTree('images').forEach((filePath) => {
+	const filePaths = enumerateFileTree('images');
+
+	for (const filePath of filePaths) {
 		const file = fs.readFileSync(filePath);
-		const fileString = file.toString();
 		const fileHash = calculateHash(file);
 
-		const newMapItemData = {
-			fileString,
-			filePath,
-		};
-
 		if (!duplicationMap.has(fileHash)) {
-			duplicationMap.set(fileHash, [newMapItemData]);
-			return;
+			duplicationMap.set(fileHash, [filePath]);
+			continue;
 		}
 
-		const existingEntry = duplicationMap.get(fileHash);
+		const existingDuplicates = duplicationMap.get(fileHash);
 
-		if (existingEntry[0].fileString === fileString) {
-			duplicationMap.set(fileHash, [...existingEntry, newMapItemData]);
-			return;
+		const isDuplicate =
+			fs.readFileSync(existingDuplicates[0], 'utf-8') ===
+			fs.readFileSync(filePath, 'utf-8');
+
+		if (isDuplicate) {
+			existingDuplicates.push(filePath);
+			continue;
 		}
 
-		const hasMisfits = duplicationMap.has(MISFITS_KEY);
-
-		if (hasMisfits) {
-			const misfits = duplicationMap.get(MISFITS_KEY);
-			duplicationMap.set(MISFITS_KEY, [
-				...misfits,
-				{ ...newMapItemData, hash: fileHash },
-			]);
-		} else {
-			duplicationMap.set(MISFITS_KEY, [{ ...newMapItemData, hash: fileHash }]);
+		if (!duplicationMap.has(MISFITS_KEY)) {
+			duplicationMap.set(MISFITS_KEY, [filePath]);
+			continue;
 		}
-	});
+
+		duplicationMap.get(MISFITS_KEY).push(filePath);
+	}
 
 	function processMisfits() {
 		const misfits = duplicationMap.get(MISFITS_KEY);
+		if (!misfits) return;
+
 		duplicationMap.delete(MISFITS_KEY);
 		const localMap = new Map();
 
-		misfits.forEach((misfit) => {
-			if (!localMap.has(misfit.hash)) {
-				localMap.set(misfit.hash, [misfit]);
+		misfits.forEach((filePath) => {
+			const file = fs.readFileSync(filePath);
+			const fileHash = calculateHash(file);
+
+			if (!localMap.has(fileHash)) {
+				localMap.set(fileHash, [filePath]);
 				return;
 			}
 
-			const existingEntry = localMap.get(misfit.hash);
+			const existingDuplicates = localMap.get(fileHash);
+			const isDuplicate =
+				fs.readFileSync(existingDuplicates[0], 'utf-8') ===
+				fs.readFileSync(filePath, 'utf-8');
 
-			if (existingEntry[0].fileString === misfit.fileString) {
-				localMap.set(misfit.hash, [...existingEntry, misfit]);
-			} else {
-				if (!duplicationMap.has(MISFITS_KEY)) {
-					duplicationMap.set(MISFITS_KEY, [misfit]);
-				} else {
-					const existingMisfits = duplicationMap.get(MISFITS_KEY);
-					duplicationMap.set(MISFITS_KEY, [...existingMisfits, misfit]);
-				}
+			if (isDuplicate) {
+				existingDuplicates.push(filePath);
+				return;
 			}
+
+			if (!localMap.has(MISFITS_KEY)) {
+				localMap.set(MISFITS_KEY, [filePath]);
+				return;
+			}
+
+			localMap.get(MISFITS_KEY).push(filePath);
 		});
 
 		localMap.forEach((group) => {
 			if (group.length > 1) {
-				result.push(group.flatMap((image) => image.filePath));
+				result.push(group);
+				return;
+			}
+
+			if (!duplicationMap.has(MISFITS_KEY)) {
+				duplicationMap.set(MISFITS_KEY, group);
+			} else {
+				duplicationMap.get(MISFITS_KEY).push(...group);
 			}
 		});
 
@@ -82,7 +92,7 @@ function detectDuplicates() {
 		if (key === MISFITS_KEY) {
 			processMisfits();
 		} else if (group.length > 1) {
-			result.push(group.flatMap((image) => image.filePath));
+			result.push(group);
 		}
 	});
 
